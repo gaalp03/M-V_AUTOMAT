@@ -23,6 +23,8 @@ HEADERS = {
     "Content-Type": "application/json",
     "Language": "hu",
     "UserSessionId": "1",
+    "Origin": "https://jegy.mav.hu",
+    "Referer": "https://jegy.mav.hu/",
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
@@ -54,7 +56,7 @@ def load_config() -> dict:
 
 
 def get_station_list(session: requests.Session) -> list[dict]:
-    resp = session.post(f"{BASE_URL}/OfferRequestApi/GetStationList", json=None, timeout=20)
+    resp = session.post(f"{BASE_URL}/OfferRequestApi/GetStationList", json={}, timeout=20)
     resp.raise_for_status()
     return resp.json()
 
