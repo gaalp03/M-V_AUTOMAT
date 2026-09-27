@@ -49,7 +49,8 @@ def load_config() -> dict:
         "travel_date": travel_date,
         "train_time": train_time,
         "train_name_hint": env("TRAIN_NAME_HINT", "Mecsek"),
-        "wanted_class": env("WANTED_CLASS", "2"),
+        "wanted_class": env("WANTED_CLASS", "any"),
+        "state_file": env("STATE_FILE", ".mav_state.json"),
         "ntfy_topic": env("NTFY_TOPIC"),
         "debug": env("DEBUG", "0") == "1",
         "time_tolerance_min": int(env("TIME_TOLERANCE_MIN", "5")),
@@ -193,6 +194,19 @@ def is_ticket_available(route: dict, wanted_class: str) -> tuple[bool, str]:
     return True, f"{hit.get('name')}. osztály, {price} Ft; {summary}"
 
 
+def load_state(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(path: str, state: dict) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False)
+
+
 def send_ntfy(topic: str, title: str, message: str, click_url: str) -> None:
     resp = requests.post(
         "https://ntfy.sh/",
@@ -269,7 +283,14 @@ def main() -> int:
             click_url="https://jegy.mav.hu/",
         )
 
-    if available:
+    state_key = f"{cfg['from_station']}|{cfg['to_station']}|{cfg['travel_date']}|{cfg['train_time']}"
+    state = load_state(cfg["state_file"])
+    already_notified = state.get(state_key, False)
+    save_state(cfg["state_file"], {state_key: available})
+
+    if available and already_notified:
+        print("Erről már ment értesítés, amíg újra be nem telik, nem küldök újat.")
+    elif available:
         send_ntfy(
             cfg["ntfy_topic"],
             title="🚨 VAN JEGY! Vedd meg gyorsan!",

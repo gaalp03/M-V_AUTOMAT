@@ -33,7 +33,7 @@ A repo **Settings → Secrets and variables → Actions** alatt:
   - `TRAVEL_DATE` (alapérték: a mai nap, formátum `YYYY-MM-DD`)
   - `TRAIN_TIME` (alapérték: `15:25`)
   - `TRAIN_NAME_HINT` (alapérték: `Mecsek`)
-  - `WANTED_CLASS` (alapérték: `2`; lehet `1`, `2` vagy `any` – bármelyik osztály)
+  - `WANTED_CLASS` (alapérték: `any` – bármelyik osztály; lehet `1` vagy `2` is)
 
 Utána a **Settings → Actions → General** alatt engedélyezd az Actions
 futását, ha még nincs bekapcsolva.
@@ -41,6 +41,9 @@ futását, ha még nincs bekapcsolva.
 A workflow (`.github/workflows/watch-ticket.yml`) 5 percenként lefut, amíg a
 megadott vonat indulási időpontja el nem múlik – utána a script automatikusan
 nem csinál semmit (nem hív API-t feleslegesen).
+
+Egy felszabadult jegyről csak egyszer jön értesítés; ha a vonat újra betelik,
+majd megint felszabadul hely, akkor jön újabb.
 
 ## 3. Hogyan dönti el, hogy van-e jegy?
 
