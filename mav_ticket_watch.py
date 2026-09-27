@@ -177,21 +177,25 @@ def debug_route_summary(route: dict) -> str:
     )
 
 
+def class_price(travel_class: dict) -> float:
+    return (travel_class.get("price") or {}).get("amount") or 0
+
+
 def is_ticket_available(route: dict, wanted_class: str) -> tuple[bool, str]:
-    # A MÁV csak azokat az osztályokat adja vissza a travelClasses-ben, amelyekre még lehet jegyet venni.
-    classes = {c.get("name"): c for c in route.get("travelClasses") or []}
+    # Élő válaszok alapján: teljesen betelt vonatnál szabadHelyAllapot="Nincs", a tickets lista üres
+    # és a travelClasses ára 0; részben betelt vonatnál csak a még megvehető osztály szerepel.
+    classes = {c.get("name"): c for c in route.get("travelClasses") or [] if class_price(c) > 0}
     seats = route.get("szabadHelyAllapot")
-    summary = f"elérhető osztályok: {sorted(classes) or 'nincs'}, szabad hely: {seats}"
+    tickets = (route.get("details") or {}).get("tickets") or []
+    summary = f"megvehető osztályok: {sorted(classes) or 'nincs'}, szabad hely: {seats}"
     if route.get("orderDisabled"):
         return False, f"a vásárlás letiltva ({route.get('orderDisabledReason') or '-'}); {summary}"
-    if wanted_class == "any":
-        hit = next(iter(classes.values()), None)
-    else:
-        hit = classes.get(wanted_class)
+    if seats == "Nincs" or not tickets:
+        return False, summary
+    hit = next(iter(classes.values()), None) if wanted_class == "any" else classes.get(wanted_class)
     if not hit:
         return False, summary
-    price = (hit.get("price") or {}).get("amount")
-    return True, f"{hit.get('name')}. osztály, {price} Ft; {summary}"
+    return True, f"{hit.get('name')}. osztály, {class_price(hit):.0f} Ft; {summary}"
 
 
 def load_state(path: str) -> dict:
