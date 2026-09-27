@@ -1,7 +1,10 @@
 # MÁV jegy figyelő
 
-5 percenként megnézi a jegy.mav.hu-n, van-e szabad jegy a heti vonatodra, és
+3 percenként megnézi a jegy.mav.hu-n, van-e szabad jegy a heti vonatodra, és
 ha van, hangos push értesítést küld a telefonodra ([ntfy](https://ntfy.sh)).
+
+Bekapcsolt állapotban a GitHub Actionsben folyamatosan fut (egy futás kb. 6
+óra, a végén újraindítja magát). Kikapcsolva nem fut semmi.
 
 Két vonat van beállítva (`config.json`), mindig a következő alkalomra:
 

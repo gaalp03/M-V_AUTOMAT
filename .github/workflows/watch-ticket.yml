@@ -1,8 +1,10 @@
 name: MÁV jegy figyelő
 
+# Egy futás kb. 5 és háromnegyed óráig 3 percenként ellenőriz, a végén újraindítja magát.
+# A cron csak tartalék, ha a lánc valamiért megszakadna.
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "7 */3 * * *"
   workflow_dispatch:
     inputs:
       figyeles:
@@ -26,14 +28,17 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
+# Új futás (pl. átállítás) azonnal leállítja az éppen futót.
 concurrency:
   group: mav-figyelo
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -43,11 +48,9 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - uses: actions/cache@v4
-        with:
-          path: .mav_state.json
-          key: mav-state-v2-${{ github.run_id }}
-          restore-keys: mav-state-v2-
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Figyelés átállítása
         if: github.event_name == 'workflow_dispatch' && inputs.figyeles != 'nincs változás'
@@ -56,15 +59,14 @@ jobs:
           FIGYELES: ${{ inputs.figyeles }}
         run: |
           python mav_ticket_watch.py --set-mode "$FIGYELES"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add config.json
           git diff --cached --quiet || git commit -m "Figyelés: $FIGYELES"
           git push
 
-      - name: Jegy ellenőrzése
+      - name: Jegyek figyelése
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          GITHUB_TOKEN: ${{ github.token }}
           DEBUG: ${{ inputs.debug && '1' || '' }}
           TEST_NOTIFY: ${{ inputs.teszt_ertesites && '1' || '' }}
-        run: python mav_ticket_watch.py
+        run: python mav_ticket_watch.py --loop-minutes 345 --interval 180

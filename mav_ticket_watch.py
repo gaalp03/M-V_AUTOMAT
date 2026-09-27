@@ -10,8 +10,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, time, timedelta
+from time import monotonic, sleep
 from zoneinfo import ZoneInfo
 
 import requests
@@ -264,14 +266,33 @@ def set_mode(cfg: dict, raw_mode: str, topic: str | None) -> int:
     return 0
 
 
-def run_check(cfg: dict, topic: str, debug: bool, test_notify: bool) -> int:
-    mode = cfg.get("figyeles", "ki")
-    names = trains_for_mode(cfg, mode)
+def git(*args: str) -> bool:
+    return subprocess.run(["git", *args], check=False).returncode == 0
+
+
+def git_sync_config() -> None:
+    git("pull", "--rebase", "--autostash", "-q")
+
+
+def git_save_state(state: dict) -> None:
+    save_json(STATE_FILE, state)
+    git("add", STATE_FILE)
+    if git("diff", "--cached", "--quiet"):
+        return
+    git("commit", "-q", "-m", "Értesítési állapot frissítése")
+    for _ in range(3):
+        if git("push", "-q"):
+            return
+        git_sync_config()
+
+
+def run_check(cfg: dict, topic: str, debug: bool, test_notify: bool) -> bool:
+    """Egy ellenőrzési kör. False-t ad vissza, ha a figyelés ki van kapcsolva."""
+    names = trains_for_mode(cfg, cfg.get("figyeles", "ki"))
     notify = bool(names)
     if not names:
         if not (debug or test_notify):
-            print("A figyelés ki van kapcsolva.")
-            return 0
+            return False
         names = list(cfg["vonatok"])  # csak diagnosztika, értesítés nélkül
 
     now = datetime.now(BUDAPEST_TZ)
@@ -294,41 +315,80 @@ def run_check(cfg: dict, topic: str, debug: bool, test_notify: bool) -> int:
             status = f"van jegy ({classes_text(classes)})"
         else:
             status = "nincs jegy"
-        print(f"[{now:%H:%M}] {label}: {status}")
+        print(f"[{now:%H:%M}] {label}: {status}", flush=True)
         status_lines.append(f"{label}: {status}")
 
         key = f"{name}|{dep.date()}"
-        new_state[key] = bool(classes)
-        if classes and notify and not state.get(key):
-            send_ntfy(topic, "Van szabad jegy!", f"{label}\nVan jegy: {classes_text(classes)}")
-        elif classes and notify:
-            print("  (erről már ment értesítés)")
+        if classes:
+            new_state[key] = True
+            if notify and not state.get(key):
+                send_ntfy(topic, "Van szabad jegy!", f"{label}\nVan jegy: {classes_text(classes)}")
 
-    if notify:
-        save_json(STATE_FILE, new_state)
+    if notify and new_state != state:
+        git_save_state(new_state)
     if test_notify:
-        header = "Figyelés: kikapcsolva" if not notify else "Figyelés bekapcsolva"
+        header = "Figyelés bekapcsolva" if notify else "Figyelés: kikapcsolva"
         send_ntfy(topic, "Teszt: a figyelő működik", header + "\n" + "\n".join(status_lines), urgent=False)
+    return notify
+
+
+def redispatch_self() -> None:
+    repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")
+    if not (repo and token):
+        return
+    resp = requests.post(
+        f"https://api.github.com/repos/{repo}/actions/workflows/watch-ticket.yml/dispatches",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+        json={"ref": os.environ.get("GITHUB_REF_NAME", "main")},
+        timeout=20,
+    )
+    print(f"Újraindítás kérve (HTTP {resp.status_code}).")
+
+
+def watch_loop(topic: str, debug: bool, test_notify: bool, minutes: float, interval_s: int) -> int:
+    deadline = monotonic() + minutes * 60
+    first = True
+    while True:
+        git_sync_config()
+        cfg = load_json(CONFIG_FILE, {})
+        try:
+            active = run_check(cfg, topic, debug and first, test_notify and first)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            print(f"A MÁV szerver most nem érhető el, később újrapróbálom: {exc}", flush=True)
+            active = True
+        except requests.HTTPError as exc:
+            if exc.response is None or exc.response.status_code < 500:
+                raise
+            print(f"MÁV szerverhiba, később újrapróbálom: {exc}", flush=True)
+            active = True
+        first = False
+        if not active:
+            print("A figyelés ki van kapcsolva, leállok.")
+            return 0
+        if monotonic() + interval_s > deadline:
+            break
+        sleep(interval_s)
+    if minutes > 0:
+        redispatch_self()
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--set-mode", help="vasárnap | péntek | mindkettő | kikapcsolva")
+    parser.add_argument("--loop-minutes", type=float, default=0,
+                        help="ennyi percig ismételje az ellenőrzést, utána indítsa újra a workflow-t")
+    parser.add_argument("--interval", type=int, default=180, help="ellenőrzések közti szünet másodpercben")
     args = parser.parse_args()
 
-    cfg = load_json(CONFIG_FILE, {})
     topic = os.environ.get("NTFY_TOPIC")
     if args.set_mode:
-        return set_mode(cfg, args.set_mode, topic)
+        return set_mode(load_json(CONFIG_FILE, {}), args.set_mode, topic)
     if not topic:
         print("HIBA: az NTFY_TOPIC környezeti változó nincs beállítva.", file=sys.stderr)
         return 1
-    try:
-        return run_check(cfg, topic, os.environ.get("DEBUG") == "1", os.environ.get("TEST_NOTIFY") == "1")
-    except (requests.ConnectionError, requests.Timeout) as exc:
-        print(f"A MÁV szerver most nem érhető el, a következő futás újrapróbálja: {exc}")
-        return 0
+    return watch_loop(topic, os.environ.get("DEBUG") == "1", os.environ.get("TEST_NOTIFY") == "1",
+                      args.loop_minutes, args.interval)
 
 
 if __name__ == "__main__":
