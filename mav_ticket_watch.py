@@ -58,19 +58,27 @@ def load_config() -> dict:
 def get_station_list(session: requests.Session) -> list[dict]:
     resp = session.post(f"{BASE_URL}/OfferRequestApi/GetStationList", json={}, timeout=20)
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    return data["stations"] if isinstance(data, dict) else data
 
 
-def find_station_code(stations: list[dict], name_query: str) -> str:
+def is_rail(station: dict) -> bool:
+    return any(m.get("code") == 100 for m in station.get("modalities") or [])
+
+
+def find_station(stations: list[dict], name_query: str) -> dict:
     query = name_query.strip().lower()
-    candidates = [
+    usable = [
         s for s in stations
-        if s.get("name") and s.get("canUseForOfferRequest") and query in s["name"].lower()
+        if isinstance(s, dict) and s.get("name") and s.get("canUseForOfferRequest") and not s.get("isAlias")
     ]
-    if not candidates:
-        raise RuntimeError(f"Nem található állomás ezzel a névvel: {name_query!r}")
-    candidates.sort(key=lambda s: len(s["name"]))
-    return candidates[0]["code"]
+    exact = [s for s in usable if s["name"].lower() == query]
+    partial = [s for s in usable if query in s["name"].lower()]
+    for group in (exact, partial):
+        rail = [s for s in group if is_rail(s)]
+        if rail or group:
+            return sorted(rail or group, key=lambda s: len(s["name"]))[0]
+    raise RuntimeError(f"Nem található állomás ezzel a névvel: {name_query!r}")
 
 
 def get_adult_customer_key(session: requests.Session) -> str:
@@ -155,6 +163,18 @@ def find_matching_route(routes: list[dict], target_dt: datetime, tolerance_min: 
     return best
 
 
+def debug_route_summary(route: dict) -> str:
+    details = route.get("details") or {}
+    tickets = details.get("tickets") or []
+    classes = [(c.get("name"), c.get("fullness")) for c in route.get("travelClasses") or []]
+    return (
+        f"  {route.get('departure', {}).get('time')} {route.get('name')!r} "
+        f"train={details.get('trainFullName')!r} orderDisabled={route.get('orderDisabled')} "
+        f"reason={route.get('orderDisabledReason')!r} szabadHely={route.get('szabadHelyAllapot')} "
+        f"classes={classes} tickets={[(t.get('name'), t.get('fullness')) for t in tickets]}"
+    )
+
+
 def is_ticket_available(route: dict) -> tuple[bool, str]:
     if route.get("orderDisabled"):
         reason = route.get("orderDisabledReason") or "orderDisabled=true"
@@ -201,26 +221,37 @@ def main() -> int:
     session.headers.update(HEADERS)
 
     stations = get_station_list(session)
-    if cfg["debug"]:
-        print("GetStationList típus:", type(stations).__name__)
-        print(json.dumps(stations, ensure_ascii=False)[:3000])
-    from_code = find_station_code(stations, cfg["from_station"])
-    to_code = find_station_code(stations, cfg["to_station"])
+    from_st = find_station(stations, cfg["from_station"])
+    to_st = find_station(stations, cfg["to_station"])
     customer_key = get_adult_customer_key(session)
+    if cfg["debug"]:
+        print(f"Indulás: {from_st['name']} ({from_st['code']}), érkezés: {to_st['name']} ({to_st['code']}), "
+              f"utastípus: {customer_key}")
 
-    body = build_offer_body(from_code, to_code, target_dt, customer_key)
+    # Kicsit korábbról keresünk, hogy a célvonat biztosan benne legyen a találatokban.
+    search_dt = target_dt - timedelta(minutes=30)
+    body = build_offer_body(from_st["code"], to_st["code"], search_dt, customer_key)
     resp = session.post(f"{BASE_URL}/OfferRequestApi/GetOfferRequest", json=body, timeout=30)
+    if cfg["debug"] and not resp.ok:
+        print(f"GetOfferRequest HTTP {resp.status_code}: {resp.text[:2000]}")
     resp.raise_for_status()
     data = resp.json()
 
-    if cfg["debug"]:
-        print(json.dumps(data, ensure_ascii=False, indent=2))
-
     routes = data.get("route") or []
+    if cfg["debug"]:
+        print(f"Válasz kulcsai: {list(data.keys())}, {len(routes)} útvonal")
+        for r in routes:
+            print(debug_route_summary(r))
+
     match = find_matching_route(routes, target_dt, cfg["time_tolerance_min"], cfg["train_name_hint"])
     if not match:
         print(f"Nem található vonat {target_dt.strftime('%H:%M')} körül a válaszban ({len(routes)} találat).")
         return 0
+
+    if cfg["debug"]:
+        slim = {k: v for k, v in match.items() if k != "serializedOfferData"}
+        print("Egyező vonat nyers adatai:")
+        print(json.dumps(slim, ensure_ascii=False, indent=1)[:15000])
 
     available, detail = is_ticket_available(match)
     stamp = now.strftime("%Y-%m-%d %H:%M:%S")
