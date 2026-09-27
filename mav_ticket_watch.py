@@ -304,7 +304,8 @@ def run_check(cfg: dict, topic: str, debug: bool, test_notify: bool) -> int:
         elif classes and notify:
             print("  (erről már ment értesítés)")
 
-    save_json(STATE_FILE, new_state)
+    if notify:
+        save_json(STATE_FILE, new_state)
     if test_notify:
         header = "Figyelés: kikapcsolva" if not notify else "Figyelés bekapcsolva"
         send_ntfy(topic, "Teszt: a figyelő működik", header + "\n" + "\n".join(status_lines), urgent=False)
