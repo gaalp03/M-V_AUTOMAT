@@ -260,6 +260,15 @@ def main() -> int:
     print(f"[{stamp}] {cfg['from_station']} -> {cfg['to_station']} "
           f"({target_dt.strftime('%H:%M')}): {'VAN JEGY' if available else 'nincs jegy'} - {detail}")
 
+    if env("TEST_NOTIFY") == "1":
+        send_ntfy(
+            cfg["ntfy_topic"],
+            title="Teszt: a MÁV figyelő működik",
+            message=f"Jelenlegi állapot ({target_dt.strftime('%H:%M')}): "
+                    f"{'VAN JEGY' if available else 'nincs jegy'} - {detail}",
+            click_url="https://jegy.mav.hu/",
+        )
+
     if available:
         send_ntfy(
             cfg["ntfy_topic"],

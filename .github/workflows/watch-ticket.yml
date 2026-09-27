@@ -9,6 +9,10 @@ on:
         description: "Nyers API válasz kiírása a logba"
         type: boolean
         default: false
+      test_notify:
+        description: "Küldjön egy teszt push értesítést"
+        type: boolean
+        default: false
 
 jobs:
   check:
@@ -32,4 +36,5 @@ jobs:
           TRAIN_NAME_HINT: ${{ vars.TRAIN_NAME_HINT }}
           WANTED_CLASS: ${{ vars.WANTED_CLASS }}
           DEBUG: ${{ inputs.debug && '1' || '' }}
+          TEST_NOTIFY: ${{ inputs.test_notify && '1' || '' }}
         run: python mav_ticket_watch.py
