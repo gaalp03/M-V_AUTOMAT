@@ -201,6 +201,9 @@ def main() -> int:
     session.headers.update(HEADERS)
 
     stations = get_station_list(session)
+    if cfg["debug"]:
+        print("GetStationList típus:", type(stations).__name__)
+        print(json.dumps(stations, ensure_ascii=False)[:3000])
     from_code = find_station_code(stations, cfg["from_station"])
     to_code = find_station_code(stations, cfg["to_station"])
     customer_key = get_adult_customer_key(session)
