@@ -30,5 +30,6 @@ jobs:
           TRAVEL_DATE: ${{ vars.TRAVEL_DATE }}
           TRAIN_TIME: ${{ vars.TRAIN_TIME }}
           TRAIN_NAME_HINT: ${{ vars.TRAIN_NAME_HINT }}
+          WANTED_CLASS: ${{ vars.WANTED_CLASS }}
           DEBUG: ${{ inputs.debug && '1' || '' }}
         run: python mav_ticket_watch.py

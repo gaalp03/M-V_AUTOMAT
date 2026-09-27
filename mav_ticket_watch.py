@@ -49,6 +49,7 @@ def load_config() -> dict:
         "travel_date": travel_date,
         "train_time": train_time,
         "train_name_hint": env("TRAIN_NAME_HINT", "Mecsek"),
+        "wanted_class": env("WANTED_CLASS", "2"),
         "ntfy_topic": env("NTFY_TOPIC"),
         "debug": env("DEBUG", "0") == "1",
         "time_tolerance_min": int(env("TIME_TOLERANCE_MIN", "5")),
@@ -175,31 +176,37 @@ def debug_route_summary(route: dict) -> str:
     )
 
 
-def is_ticket_available(route: dict) -> tuple[bool, str]:
+def is_ticket_available(route: dict, wanted_class: str) -> tuple[bool, str]:
+    # A MÁV csak azokat az osztályokat adja vissza a travelClasses-ben, amelyekre még lehet jegyet venni.
+    classes = {c.get("name"): c for c in route.get("travelClasses") or []}
+    seats = route.get("szabadHelyAllapot")
+    summary = f"elérhető osztályok: {sorted(classes) or 'nincs'}, szabad hely: {seats}"
     if route.get("orderDisabled"):
-        reason = route.get("orderDisabledReason") or "orderDisabled=true"
-        return False, f"a foglalás letiltva ({reason})"
-    tickets = route.get("details", {}).get("tickets") or []
-    if not tickets:
-        return False, "nincs elérhető jegytípus (tickets üres)"
-    usable = [t for t in tickets if t.get("fullness", 100) < 100]
-    if not usable:
-        return False, "minden jegytípus betelt (fullness=100)"
-    return True, f"{len(usable)} jegytípus elérhető"
+        return False, f"a vásárlás letiltva ({route.get('orderDisabledReason') or '-'}); {summary}"
+    if wanted_class == "any":
+        hit = next(iter(classes.values()), None)
+    else:
+        hit = classes.get(wanted_class)
+    if not hit:
+        return False, summary
+    price = (hit.get("price") or {}).get("amount")
+    return True, f"{hit.get('name')}. osztály, {price} Ft; {summary}"
 
 
 def send_ntfy(topic: str, title: str, message: str, click_url: str) -> None:
-    requests.post(
-        f"https://ntfy.sh/{topic}",
-        data=message.encode("utf-8"),
-        headers={
-            "Title": title,
-            "Priority": "urgent",
-            "Tags": "rotating_light,steam_locomotive",
-            "Click": click_url,
+    resp = requests.post(
+        "https://ntfy.sh/",
+        json={
+            "topic": topic,
+            "title": title,
+            "message": message,
+            "priority": 5,
+            "tags": ["rotating_light", "steam_locomotive"],
+            "click": click_url,
         },
         timeout=20,
     )
+    resp.raise_for_status()
 
 
 def main() -> int:
@@ -248,12 +255,7 @@ def main() -> int:
         print(f"Nem található vonat {target_dt.strftime('%H:%M')} körül a válaszban ({len(routes)} találat).")
         return 0
 
-    if cfg["debug"]:
-        slim = {k: v for k, v in match.items() if k != "serializedOfferData"}
-        print("Egyező vonat nyers adatai:")
-        print(json.dumps(slim, ensure_ascii=False, indent=1)[:15000])
-
-    available, detail = is_ticket_available(match)
+    available, detail = is_ticket_available(match, cfg["wanted_class"])
     stamp = now.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{stamp}] {cfg['from_station']} -> {cfg['to_station']} "
           f"({target_dt.strftime('%H:%M')}): {'VAN JEGY' if available else 'nincs jegy'} - {detail}")

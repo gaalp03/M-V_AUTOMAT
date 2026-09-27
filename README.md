@@ -9,8 +9,7 @@ InterCity, 15:25-ös indulás, a mai napon.**
 
 A script a jegy.mav.hu weboldal nem hivatalos, nem dokumentált belső API-ját
 hívja (`jegy-a.mav.hu/IK_API_PROD/api`), közösségi reverse-engineering
-projektek alapján. Emiatt a "van jegy / nincs jegy" felismerés heurisztikus –
-lásd az alábbi **Fontos, első lépés** részt.
+projektek alapján.
 
 ## 1. ntfy topic beállítása
 
@@ -34,6 +33,7 @@ A repo **Settings → Secrets and variables → Actions** alatt:
   - `TRAVEL_DATE` (alapérték: a mai nap, formátum `YYYY-MM-DD`)
   - `TRAIN_TIME` (alapérték: `15:25`)
   - `TRAIN_NAME_HINT` (alapérték: `Mecsek`)
+  - `WANTED_CLASS` (alapérték: `2`; lehet `1`, `2` vagy `any` – bármelyik osztály)
 
 Utána a **Settings → Actions → General** alatt engedélyezd az Actions
 futását, ha még nincs bekapcsolva.
@@ -42,21 +42,21 @@ A workflow (`.github/workflows/watch-ticket.yml`) 5 percenként lefut, amíg a
 megadott vonat indulási időpontja el nem múlik – utána a script automatikusan
 nem csinál semmit (nem hív API-t feleslegesen).
 
-## 3. Fontos, első lépés: ellenőrizd a felismerést
+## 3. Hogyan dönti el, hogy van-e jegy?
 
-Mivel ez a fejlesztői sandbox nem tud kimenő hálózati kérést küldeni a
-`jegy-a.mav.hu` felé (le van tiltva), a "van jegy" / "nincs jegy" logikát
-**élesben nem tudtam kipróbálni**. Mielőtt megbízol benne:
+A MÁV ajánlatkérő válaszában a vonat `travelClasses` listája csak azokat az
+osztályokat tartalmazza, amelyekre még lehet jegyet venni (pl. ha a 2. osztály
+betelt, csak `"1"` szerepel benne). A script akkor riaszt, ha a `WANTED_CLASS`
+osztály megjelenik ebben a listában, és a vásárlás nincs letiltva.
 
-1. A GitHub repo **Actions** fülén indítsd el kézzel a workflow-t
-   (`Run workflow`), és jelöld be a **debug** opciót.
-2. Nézd meg a futás logját – kiírja a MÁV API nyers válaszát. Mivel most
-   tudjuk, hogy ez a vonat valóban betelt, a logban látnod kell, hogy a
-   script `"nincs jegy"` státuszt ír, és látod a nyers JSON-t is (`tickets`,
-   `orderDisabled`, `fullness` mezők).
-3. Ha a script véletlenül `"VAN JEGY"`-et írna ki egy tudottan betelt
-   vonatra, szólj, és a `is_ticket_available()` függvényt (`mav_ticket_watch.py`)
-   pontosítjuk a debug logban látott mezők alapján.
+Minden futás logjában látszik az aktuális állapot, pl.:
+
+```
+Szentlőrinc -> Budapest-Kelenföld (15:25): nincs jegy - elérhető osztályok: ['1'], szabad hely: Keves
+```
+
+Kézi futtatásnál (`Run workflow`) a **debug** opcióval az összes aznapi
+vonat összefoglalója is kiíródik.
 
 ## 4. Ha megvetted a jegyet / elmúlt a vasárnap
 
