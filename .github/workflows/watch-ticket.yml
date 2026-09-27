@@ -1,0 +1,34 @@
+name: MÁV jegy figyelő
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: "Nyers API válasz kiírása a logba"
+        type: boolean
+        default: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Jegy ellenőrzése
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          FROM_STATION: ${{ vars.FROM_STATION }}
+          TO_STATION: ${{ vars.TO_STATION }}
+          TRAVEL_DATE: ${{ vars.TRAVEL_DATE }}
+          TRAIN_TIME: ${{ vars.TRAIN_TIME }}
+          TRAIN_NAME_HINT: ${{ vars.TRAIN_NAME_HINT }}
+          DEBUG: ${{ inputs.debug && '1' || '' }}
+        run: python mav_ticket_watch.py
