@@ -5,14 +5,31 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
+      figyeles:
+        description: "Mit figyeljen?"
+        type: choice
+        options:
+          - nincs változás
+          - vasárnap
+          - péntek
+          - mindkettő
+          - kikapcsolva
+        default: nincs változás
+      teszt_ertesites:
+        description: "Küldjön teszt értesítést"
+        type: boolean
+        default: false
       debug:
-        description: "Nyers API válasz kiírása a logba"
+        description: "Részletes log"
         type: boolean
         default: false
-      test_notify:
-        description: "Küldjön egy teszt push értesítést"
-        type: boolean
-        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mav-figyelo
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -32,15 +49,22 @@ jobs:
           key: mav-state-${{ github.run_id }}
           restore-keys: mav-state-
 
+      - name: Figyelés átállítása
+        if: github.event_name == 'workflow_dispatch' && inputs.figyeles != 'nincs változás'
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          FIGYELES: ${{ inputs.figyeles }}
+        run: |
+          python mav_ticket_watch.py --set-mode "$FIGYELES"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config.json
+          git diff --cached --quiet || git commit -m "Figyelés: $FIGYELES"
+          git push
+
       - name: Jegy ellenőrzése
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          FROM_STATION: ${{ vars.FROM_STATION }}
-          TO_STATION: ${{ vars.TO_STATION }}
-          TRAVEL_DATE: ${{ vars.TRAVEL_DATE }}
-          TRAIN_TIME: ${{ vars.TRAIN_TIME }}
-          TRAIN_NAME_HINT: ${{ vars.TRAIN_NAME_HINT }}
-          WANTED_CLASS: ${{ vars.WANTED_CLASS }}
           DEBUG: ${{ inputs.debug && '1' || '' }}
-          TEST_NOTIFY: ${{ inputs.test_notify && '1' || '' }}
+          TEST_NOTIFY: ${{ inputs.teszt_ertesites && '1' || '' }}
         run: python mav_ticket_watch.py

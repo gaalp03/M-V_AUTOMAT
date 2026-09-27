@@ -1,0 +1,18 @@
+{
+  "figyeles": "ki",
+  "osztaly": "barmelyik",
+  "vonatok": {
+    "vasarnap": {
+      "nap": "vasarnap",
+      "honnan": "Szentlőrinc",
+      "hova": "Budapest-Kelenföld",
+      "indulas": "15:25"
+    },
+    "pentek": {
+      "nap": "pentek",
+      "honnan": "Budapest-Kelenföld",
+      "hova": "Szentlőrinc",
+      "indulas": "16:12"
+    }
+  }
+}

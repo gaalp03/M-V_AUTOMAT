@@ -1,76 +1,46 @@
 # MÁV jegy figyelő
 
-Figyeli egy adott MÁV vonat jegyértékesítését, és amint felszabadul rajta egy
-jegy, azonnal küld egy nagyon látszó (sürgős, hangos) push értesítést a
-telefonodra az [ntfy.sh](https://ntfy.sh) szolgáltatáson keresztül.
+5 percenként megnézi a jegy.mav.hu-n, van-e szabad jegy a heti vonatodra, és
+ha van, hangos push értesítést küld a telefonodra ([ntfy](https://ntfy.sh)).
 
-Alapértelmezett beállítás: **Szentlőrinc → Budapest-Kelenföld, Mecsek
-InterCity, 15:25-ös indulás, a mai napon.**
+Két vonat van beállítva (`config.json`), mindig a következő alkalomra:
 
-A script a jegy.mav.hu weboldal nem hivatalos, nem dokumentált belső API-ját
-hívja (`jegy-a.mav.hu/IK_API_PROD/api`), közösségi reverse-engineering
-projektek alapján.
+| Név | Mikor | Honnan → hova |
+|---|---|---|
+| vasárnap | minden vasárnap 15:25 | Szentlőrinc → Budapest-Kelenföld |
+| péntek | minden pénteken 16:12 | Budapest-Kelenföld → Szentlőrinc |
 
-## 1. ntfy topic beállítása
+## Váltás és kikapcsolás
 
-1. Telepítsd a **ntfy** appot ([Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy),
-   [iOS](https://apps.apple.com/us/app/ntfy/id1625396347)), vagy nyisd meg
-   https://ntfy.sh a böngészőben.
-2. Válassz egy egyedi, nehezen kitalálható "topic" nevet (ez olyan, mint egy
-   csatornanév, pl. `sztl-bp-jegy-x7k2`), és iratkozz fel rá az appban.
-   Bárki, aki ismeri a topic nevet, tud rá üzenetet küldeni, ezért ne legyen
-   túl egyszerű.
+GitHub (appban vagy böngészőben) → a repó → **Actions** → **MÁV jegy figyelő**
+→ **Run workflow** → a **Mit figyeljen?** menüben válaszd ki:
 
-## 2. GitHub repo beállítása
+- `vasárnap` – csak a vasárnapi vonatot
+- `péntek` – csak a pénteki vonatot
+- `mindkettő` – mindkettőt
+- `kikapcsolva` – semmit
 
-A repo **Settings → Secrets and variables → Actions** alatt:
+→ **Run workflow**. Pár másodperc múlva jön egy megerősítő push arról, hogy
+mit figyel mostantól.
 
-- **Secrets** fül → új secret: `NTFY_TOPIC` = a fent kiválasztott topic név.
-- **Variables** fül (opcionális, ha mást szeretnél figyelni, mint az
-  alapértelmezett):
-  - `FROM_STATION` (alapérték: `Szentlőrinc`)
-  - `TO_STATION` (alapérték: `Budapest-Kelenföld`)
-  - `TRAVEL_DATE` (alapérték: a mai nap, formátum `YYYY-MM-DD`)
-  - `TRAIN_TIME` (alapérték: `15:25`)
-  - `TRAIN_NAME_HINT` (alapérték: `Mecsek`)
-  - `WANTED_CLASS` (alapérték: `any` – bármelyik osztály; lehet `1` vagy `2` is)
+Egy felszabadult jegyről csak egy értesítés jön. Ha megvetted a jegyet,
+kapcsold ki (vagy válts a másik vonatra).
 
-Utána a **Settings → Actions → General** alatt engedélyezd az Actions
-futását, ha még nincs bekapcsolva.
+## Beállítás (egyszeri)
 
-A workflow (`.github/workflows/watch-ticket.yml`) 5 percenként lefut, amíg a
-megadott vonat indulási időpontja el nem múlik – utána a script automatikusan
-nem csinál semmit (nem hív API-t feleslegesen).
+1. iPhone: **ntfy** app → **+** → iratkozz fel a topic nevedre.
+2. GitHub repó → Settings → Secrets and variables → Actions → Secrets:
+   `NTFY_TOPIC` = ugyanez a topic név.
 
-Egy felszabadult jegyről csak egyszer jön értesítés; ha a vonat újra betelik,
-majd megint felszabadul hely, akkor jön újabb.
+## Egyéb
 
-## 3. Hogyan dönti el, hogy van-e jegy?
-
-A MÁV ajánlatkérő válaszában a vonat `travelClasses` listája csak azokat az
-osztályokat tartalmazza, amelyekre még lehet jegyet venni (pl. ha a 2. osztály
-betelt, csak `"1"` szerepel benne). A script akkor riaszt, ha a `WANTED_CLASS`
-osztály megjelenik ebben a listában, és a vásárlás nincs letiltva.
-
-Minden futás logjában látszik az aktuális állapot, pl.:
-
-```
-Szentlőrinc -> Budapest-Kelenföld (15:25): nincs jegy - elérhető osztályok: ['1'], szabad hely: Keves
-```
-
-Kézi futtatásnál (`Run workflow`) a **debug** opcióval az összes aznapi
-vonat összefoglalója is kiíródik.
-
-## 4. Ha megvetted a jegyet / elmúlt a vasárnap
-
-Kapcsold ki a workflow-t: **Actions → MÁV jegy figyelő → ⋯ → Disable
-workflow**, különben minden érintett napon 5 percenként tovább fut.
-
-## Helyi futtatás (teszteléshez)
-
-```bash
-pip install -r requirements.txt
-export NTFY_TOPIC=sztl-bp-jegy-x7k2
-export DEBUG=1
-python mav_ticket_watch.py
-```
+- **Teszt értesítés:** Run workflow → pipáld be a *Küldjön teszt
+  értesítést* opciót. Ez kikapcsolt állapotban is lekérdezi mindkét vonatot,
+  és elküldi az aktuális állapotot.
+- **Más vonat vagy időpont:** a `config.json`-ban írd át a `honnan`, `hova`,
+  `indulas` vagy `nap` mezőt (`hetfo` … `vasarnap`).
+- **Osztály:** a `config.json`-ban az `osztaly` értéke lehet `barmelyik`,
+  `1` vagy `2`.
+- A script a jegy.mav.hu nem hivatalos belső API-ját használja
+  (`jegy-a.mav.hu/IK_API_PROD/api`). Ha a MÁV ezt megváltoztatja, a figyelő
+  elromolhat; ilyenkor a GitHub Actions futás pirosra vált.

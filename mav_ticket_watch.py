@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-"""Figyeli egy adott MÁV vonat jegyeladását, és push értesítést küld (ntfy.sh),
-amint a keresett viszonylaton szabad jegy jelenik meg.
+"""Figyeli a config.json-ban megadott heti MÁV vonatok jegyeladását, és push
+értesítést küld (ntfy.sh), amint valamelyiken szabad jegy van.
 
 A jegy.mav.hu weboldal nem dokumentált belső API-ját használja
-(https://jegy-a.mav.hu/IK_API_PROD/api), amit közösségi reverse-engineering
-projektek (pl. github.com/berenteb/mav-api-ts) alapján ismerünk.
+(https://jegy-a.mav.hu/IK_API_PROD/api).
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
 
 BASE_URL = "https://jegy-a.mav.hu/IK_API_PROD/api"
 BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
+CONFIG_FILE = "config.json"
+STATE_FILE = ".mav_state.json"
+TIME_TOLERANCE = timedelta(minutes=5)
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -33,28 +36,62 @@ HEADERS = {
 
 DEFAULT_CUSTOMER_KEY = "HU_44_026-065"  # felnőtt, teljes árú - fallback, ha a lookup nem sikerül
 
+WEEKDAYS = {"hetfo": 0, "kedd": 1, "szerda": 2, "csutortok": 3, "pentek": 4, "szombat": 5, "vasarnap": 6}
+WEEKDAY_NAMES = ["hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap"]
+MONTH_NAMES = ["január", "február", "március", "április", "május", "június", "július",
+               "augusztus", "szeptember", "október", "november", "december"]
 
-def env(name: str, default: str | None = None) -> str | None:
-    value = os.environ.get(name)
-    return value if value else default
+# A workflow legördülő menüjének értékei -> config.json "figyeles" értékei
+MODE_ALIASES = {
+    "vasárnap": "vasarnap", "vasarnap": "vasarnap",
+    "péntek": "pentek", "pentek": "pentek",
+    "mindkettő": "mindketto", "mindketto": "mindketto",
+    "kikapcsolva": "ki", "ki": "ki",
+}
 
 
-def load_config() -> dict:
-    now_bp = datetime.now(BUDAPEST_TZ)
-    travel_date = env("TRAVEL_DATE", now_bp.strftime("%Y-%m-%d"))
-    train_time = env("TRAIN_TIME", "15:25")
-    return {
-        "from_station": env("FROM_STATION", "Szentlőrinc"),
-        "to_station": env("TO_STATION", "Budapest-Kelenföld"),
-        "travel_date": travel_date,
-        "train_time": train_time,
-        "train_name_hint": env("TRAIN_NAME_HINT", "Mecsek"),
-        "wanted_class": env("WANTED_CLASS", "any"),
-        "state_file": env("STATE_FILE", ".mav_state.json"),
-        "ntfy_topic": env("NTFY_TOPIC"),
-        "debug": env("DEBUG", "0") == "1",
-        "time_tolerance_min": int(env("TIME_TOLERANCE_MIN", "5")),
-    }
+def load_json(path: str, default: dict) -> dict:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(path: str, data: dict) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def next_departure(train: dict, now: datetime) -> datetime:
+    hour, minute = map(int, train["indulas"].split(":"))
+    days_ahead = (WEEKDAYS[train["nap"]] - now.weekday()) % 7
+    dep = datetime.combine(now.date() + timedelta(days=days_ahead), time(hour, minute), tzinfo=BUDAPEST_TZ)
+    if dep <= now:
+        dep += timedelta(days=7)
+    return dep
+
+
+def train_label(train: dict, dep: datetime) -> str:
+    day = f"{MONTH_NAMES[dep.month - 1]} {dep.day}. ({WEEKDAY_NAMES[dep.weekday()]})"
+    return f"{day} {train['indulas']}, {train['honnan']} → {train['hova']}"
+
+
+def trains_for_mode(cfg: dict, mode: str) -> list[str]:
+    if mode == "ki":
+        return []
+    if mode == "mindketto":
+        return list(cfg["vonatok"])
+    return [mode]
+
+
+def mode_description(cfg: dict, mode: str, now: datetime) -> str:
+    names = trains_for_mode(cfg, mode)
+    if not names:
+        return "A figyelés ki van kapcsolva."
+    lines = [train_label(cfg["vonatok"][n], next_departure(cfg["vonatok"][n], now)) for n in names]
+    return "Mostantól figyelem:\n" + "\n".join(lines)
 
 
 def get_station_list(session: requests.Session) -> list[dict]:
@@ -91,13 +128,11 @@ def get_adult_customer_key(session: requests.Session) -> str:
             timeout=20,
         )
         resp.raise_for_status()
-        data = resp.json()
-        for ct in data.get("customerTypes", []):
-            key = ct.get("key", "")
-            name = (ct.get("name") or "").lower()
-            if key.startswith("HU_44_") and "felnőtt" in name:
-                return key
-        for ct in data.get("customerTypes", []):
+        customer_types = resp.json().get("customerTypes", [])
+        for ct in customer_types:
+            if ct.get("key", "").startswith("HU_44_") and "felnőtt" in (ct.get("name") or "").lower():
+                return ct["key"]
+        for ct in customer_types:
             if ct.get("key", "").startswith("HU_44_"):
                 return ct["key"]
     except requests.RequestException:
@@ -105,26 +140,21 @@ def get_adult_customer_key(session: requests.Session) -> str:
     return DEFAULT_CUSTOMER_KEY
 
 
-def build_offer_body(from_code: str, to_code: str, travel_dt_local: datetime, customer_key: str) -> dict:
-    travel_dt_utc_iso = travel_dt_local.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+def build_offer_body(from_code: str, to_code: str, travel_dt: datetime, customer_key: str) -> dict:
+    travel_dt_utc = travel_dt.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     return {
         "offerkind": "1",
         "startStationCode": from_code,
         "endStationCode": to_code,
         "innerStationsCodes": [],
         "passangers": [
-            {
-                "passengerCount": 1,
-                "passengerId": 0,
-                "customerTypeKey": customer_key,
-                "customerDiscountsKeys": [],
-            }
+            {"passengerCount": 1, "passengerId": 0, "customerTypeKey": customer_key, "customerDiscountsKeys": []}
         ],
         "isOneWayTicket": True,
         "isTravelEndTime": False,
         "isSupplementaryTicketsOnly": False,
-        "travelStartDate": travel_dt_utc_iso,
-        "travelReturnDate": travel_dt_utc_iso,
+        "travelStartDate": travel_dt_utc,
+        "travelReturnDate": travel_dt_utc,
         "selectedServices": [],
         "selectedSearchServices": [],
         "eszkozSzamok": [],
@@ -133,47 +163,36 @@ def build_offer_body(from_code: str, to_code: str, travel_dt_local: datetime, cu
     }
 
 
-def parse_departure_local(iso_str: str) -> datetime:
-    normalized = iso_str.replace("Z", "+00:00")
-    dt = datetime.fromisoformat(normalized)
+def parse_departure(iso_str: str) -> datetime:
+    dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        # A MÁV API a hazai viszonylatoknál általában helyi (budapesti) időt ad vissza offset nélkül.
         return dt.replace(tzinfo=BUDAPEST_TZ)
     return dt.astimezone(BUDAPEST_TZ)
 
 
-def find_matching_route(routes: list[dict], target_dt: datetime, tolerance_min: int, name_hint: str) -> dict | None:
-    best = None
-    best_diff = timedelta(minutes=tolerance_min + 1)
+def find_matching_route(routes: list[dict], target: datetime) -> dict | None:
+    best, best_diff = None, TIME_TOLERANCE + timedelta(seconds=1)
     for route in routes:
-        dep = route.get("departure", {}).get("time")
+        dep = (route.get("departure") or {}).get("time")
         if not dep:
             continue
         try:
-            dep_local = parse_departure_local(dep)
+            diff = abs(parse_departure(dep) - target)
         except ValueError:
             continue
-        diff = abs(dep_local - target_dt)
-        if diff <= timedelta(minutes=tolerance_min) and diff < best_diff:
+        if diff < best_diff:
             best, best_diff = route, diff
-    if best and name_hint:
-        haystack = " ".join(
-            str(x) for x in [best.get("name"), best.get("details", {}).get("trainFullName")] if x
-        ).lower()
-        if name_hint.lower() not in haystack:
-            print(f"[figyelmeztetés] az időben egyező vonat neve nem tartalmazza a '{name_hint}' szót: {haystack!r}")
     return best
 
 
 def debug_route_summary(route: dict) -> str:
     details = route.get("details") or {}
     tickets = details.get("tickets") or []
-    classes = [(c.get("name"), c.get("fullness")) for c in route.get("travelClasses") or []]
+    classes = [(c.get("name"), (c.get("price") or {}).get("amount")) for c in route.get("travelClasses") or []]
     return (
-        f"  {route.get('departure', {}).get('time')} {route.get('name')!r} "
-        f"train={details.get('trainFullName')!r} orderDisabled={route.get('orderDisabled')} "
-        f"reason={route.get('orderDisabledReason')!r} szabadHely={route.get('szabadHelyAllapot')} "
-        f"classes={classes} tickets={[(t.get('name'), t.get('fullness')) for t in tickets]}"
+        f"  {(route.get('departure') or {}).get('time')} {details.get('trainFullName')!r} "
+        f"orderDisabled={route.get('orderDisabled')} szabadHely={route.get('szabadHelyAllapot')} "
+        f"osztályok(ár)={classes} jegyek={[t.get('name') for t in tickets]}"
     )
 
 
@@ -181,130 +200,134 @@ def class_price(travel_class: dict) -> float:
     return (travel_class.get("price") or {}).get("amount") or 0
 
 
-def is_ticket_available(route: dict, wanted_class: str) -> tuple[bool, str]:
-    # Élő válaszok alapján: teljesen betelt vonatnál szabadHelyAllapot="Nincs", a tickets lista üres
-    # és a travelClasses ára 0; részben betelt vonatnál csak a még megvehető osztály szerepel.
-    classes = {c.get("name"): c for c in route.get("travelClasses") or [] if class_price(c) > 0}
-    seats = route.get("szabadHelyAllapot")
-    tickets = (route.get("details") or {}).get("tickets") or []
-    summary = f"megvehető osztályok: {sorted(classes) or 'nincs'}, szabad hely: {seats}"
-    if route.get("orderDisabled"):
-        return False, f"a vásárlás letiltva ({route.get('orderDisabledReason') or '-'}); {summary}"
-    if seats == "Nincs" or not tickets:
-        return False, summary
-    hit = next(iter(classes.values()), None) if wanted_class == "any" else classes.get(wanted_class)
-    if not hit:
-        return False, summary
-    return True, f"{hit.get('name')}. osztály, {class_price(hit):.0f} Ft; {summary}"
+def available_classes(route: dict, wanted: str) -> list[str]:
+    # Élő válaszok alapján: teljesen betelt vonatnál szabadHelyAllapot="Nincs", a jegylista üres és az
+    # osztály ára 0; részben betelt vonatnál csak a még megvehető osztály szerepel a travelClasses-ben.
+    if route.get("orderDisabled") or route.get("szabadHelyAllapot") == "Nincs":
+        return []
+    if not (route.get("details") or {}).get("tickets"):
+        return []
+    names = sorted({c.get("name") for c in route.get("travelClasses") or [] if class_price(c) > 0})
+    return names if wanted == "barmelyik" else [n for n in names if n == wanted]
 
 
-def load_state(path: str) -> dict:
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+def classes_text(names: list[str]) -> str:
+    return " és ".join(f"{n}." for n in names) + " osztály"
 
 
-def save_state(path: str, state: dict) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False)
+def check_train(session: requests.Session, stations: list[dict], customer_key: str,
+                train: dict, dep: datetime, wanted: str, debug: bool) -> list[str] | None:
+    from_st = find_station(stations, train["honnan"])
+    to_st = find_station(stations, train["hova"])
+    # Kicsit korábbról keresünk, hogy a célvonat biztosan benne legyen a találatokban.
+    body = build_offer_body(from_st["code"], to_st["code"], dep - timedelta(minutes=30), customer_key)
+    resp = session.post(f"{BASE_URL}/OfferRequestApi/GetOfferRequest", json=body, timeout=30)
+    if debug and not resp.ok:
+        print(f"GetOfferRequest HTTP {resp.status_code}: {resp.text[:2000]}")
+    resp.raise_for_status()
+    routes = resp.json().get("route") or []
+    if debug:
+        print(f"{from_st['name']} ({from_st['code']}) -> {to_st['name']} ({to_st['code']}), {len(routes)} vonat:")
+        for r in routes:
+            print(debug_route_summary(r))
+    match = find_matching_route(routes, dep)
+    return None if match is None else available_classes(match, wanted)
 
 
-def send_ntfy(topic: str, title: str, message: str, click_url: str) -> None:
+def send_ntfy(topic: str, title: str, message: str, urgent: bool = True) -> None:
     resp = requests.post(
         "https://ntfy.sh/",
         json={
             "topic": topic,
             "title": title,
             "message": message,
-            "priority": 5,
-            "tags": ["rotating_light", "steam_locomotive"],
-            "click": click_url,
+            "priority": 5 if urgent else 3,
+            "tags": ["rotating_light", "train"] if urgent else ["train"],
+            "click": "https://jegy.mav.hu/",
         },
         timeout=20,
     )
     resp.raise_for_status()
 
 
-def main() -> int:
-    cfg = load_config()
-    if not cfg["ntfy_topic"]:
-        print("HIBA: az NTFY_TOPIC környezeti változó nincs beállítva.", file=sys.stderr)
+def set_mode(cfg: dict, raw_mode: str, topic: str | None) -> int:
+    mode = MODE_ALIASES.get(raw_mode.strip().lower())
+    if mode is None or (mode not in ("ki", "mindketto") and mode not in cfg["vonatok"]):
+        print(f"Ismeretlen figyelési mód: {raw_mode!r}", file=sys.stderr)
         return 1
+    cfg["figyeles"] = mode
+    save_json(CONFIG_FILE, cfg)
+    text = mode_description(cfg, mode, datetime.now(BUDAPEST_TZ))
+    print(text)
+    if topic:
+        send_ntfy(topic, "Figyelés átállítva", text, urgent=False)
+    return 0
 
-    target_dt = datetime.strptime(
-        f"{cfg['travel_date']} {cfg['train_time']}", "%Y-%m-%d %H:%M"
-    ).replace(tzinfo=BUDAPEST_TZ)
+
+def run_check(cfg: dict, topic: str, debug: bool, test_notify: bool) -> int:
+    mode = cfg.get("figyeles", "ki")
+    names = trains_for_mode(cfg, mode)
+    notify = bool(names)
+    if not names:
+        if not (debug or test_notify):
+            print("A figyelés ki van kapcsolva.")
+            return 0
+        names = list(cfg["vonatok"])  # csak diagnosztika, értesítés nélkül
 
     now = datetime.now(BUDAPEST_TZ)
-    if now > target_dt:
-        print(f"A vonat ({target_dt}) már elindult, nincs mit figyelni.")
-        return 0
-
     session = requests.Session()
     session.headers.update(HEADERS)
-
     stations = get_station_list(session)
-    from_st = find_station(stations, cfg["from_station"])
-    to_st = find_station(stations, cfg["to_station"])
     customer_key = get_adult_customer_key(session)
-    if cfg["debug"]:
-        print(f"Indulás: {from_st['name']} ({from_st['code']}), érkezés: {to_st['name']} ({to_st['code']}), "
-              f"utastípus: {customer_key}")
+    wanted = cfg.get("osztaly", "barmelyik")
 
-    # Kicsit korábbról keresünk, hogy a célvonat biztosan benne legyen a találatokban.
-    search_dt = target_dt - timedelta(minutes=30)
-    body = build_offer_body(from_st["code"], to_st["code"], search_dt, customer_key)
-    resp = session.post(f"{BASE_URL}/OfferRequestApi/GetOfferRequest", json=body, timeout=30)
-    if cfg["debug"] and not resp.ok:
-        print(f"GetOfferRequest HTTP {resp.status_code}: {resp.text[:2000]}")
-    resp.raise_for_status()
-    data = resp.json()
+    state = load_json(STATE_FILE, {})
+    new_state, status_lines = {}, []
+    for name in names:
+        train = cfg["vonatok"][name]
+        dep = next_departure(train, now)
+        label = train_label(train, dep)
+        classes = check_train(session, stations, customer_key, train, dep, wanted, debug)
+        if classes is None:
+            status = "nem találom ezt a vonatot"
+        elif classes:
+            status = f"van jegy ({classes_text(classes)})"
+        else:
+            status = "nincs jegy"
+        print(f"[{now:%H:%M}] {label}: {status}")
+        status_lines.append(f"{label}: {status}")
 
-    routes = data.get("route") or []
-    if cfg["debug"]:
-        print(f"Válasz kulcsai: {list(data.keys())}, {len(routes)} útvonal")
-        for r in routes:
-            print(debug_route_summary(r))
+        key = f"{name}|{dep.date()}"
+        new_state[key] = bool(classes)
+        if classes and notify and not state.get(key):
+            send_ntfy(topic, "Van szabad jegy!", f"{label}\nVan jegy: {classes_text(classes)}")
+        elif classes and notify:
+            print("  (erről már ment értesítés)")
 
-    match = find_matching_route(routes, target_dt, cfg["time_tolerance_min"], cfg["train_name_hint"])
-    if not match:
-        print(f"Nem található vonat {target_dt.strftime('%H:%M')} körül a válaszban ({len(routes)} találat).")
-        return 0
-
-    available, detail = is_ticket_available(match, cfg["wanted_class"])
-    stamp = now.strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{stamp}] {cfg['from_station']} -> {cfg['to_station']} "
-          f"({target_dt.strftime('%H:%M')}): {'VAN JEGY' if available else 'nincs jegy'} - {detail}")
-
-    if env("TEST_NOTIFY") == "1":
-        send_ntfy(
-            cfg["ntfy_topic"],
-            title="Teszt: a MÁV figyelő működik",
-            message=f"Jelenlegi állapot ({target_dt.strftime('%H:%M')}): "
-                    f"{'VAN JEGY' if available else 'nincs jegy'} - {detail}",
-            click_url="https://jegy.mav.hu/",
-        )
-
-    state_key = f"{cfg['from_station']}|{cfg['to_station']}|{cfg['travel_date']}|{cfg['train_time']}"
-    state = load_state(cfg["state_file"])
-    already_notified = state.get(state_key, False)
-    save_state(cfg["state_file"], {state_key: available})
-
-    if available and already_notified:
-        print("Erről már ment értesítés, amíg újra be nem telik, nem küldök újat.")
-    elif available:
-        send_ntfy(
-            cfg["ntfy_topic"],
-            title="🚨 VAN JEGY! Vedd meg gyorsan!",
-            message=(
-                f"{cfg['from_station']} → {cfg['to_station']}, "
-                f"{target_dt.strftime('%Y-%m-%d %H:%M')} ({cfg['train_name_hint']} IC)\n{detail}"
-            ),
-            click_url="https://jegy.mav.hu/",
-        )
+    save_json(STATE_FILE, new_state)
+    if test_notify:
+        header = "Figyelés: kikapcsolva" if not notify else "Figyelés bekapcsolva"
+        send_ntfy(topic, "Teszt: a figyelő működik", header + "\n" + "\n".join(status_lines), urgent=False)
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--set-mode", help="vasárnap | péntek | mindkettő | kikapcsolva")
+    args = parser.parse_args()
+
+    cfg = load_json(CONFIG_FILE, {})
+    topic = os.environ.get("NTFY_TOPIC")
+    if args.set_mode:
+        return set_mode(cfg, args.set_mode, topic)
+    if not topic:
+        print("HIBA: az NTFY_TOPIC környezeti változó nincs beállítva.", file=sys.stderr)
+        return 1
+    try:
+        return run_check(cfg, topic, os.environ.get("DEBUG") == "1", os.environ.get("TEST_NOTIFY") == "1")
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        print(f"A MÁV szerver most nem érhető el, a következő futás újrapróbálja: {exc}")
+        return 0
 
 
 if __name__ == "__main__":
