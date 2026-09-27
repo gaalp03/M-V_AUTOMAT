@@ -46,8 +46,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .mav_state.json
-          key: mav-state-${{ github.run_id }}
-          restore-keys: mav-state-
+          key: mav-state-v2-${{ github.run_id }}
+          restore-keys: mav-state-v2-
 
       - name: Figyelés átállítása
         if: github.event_name == 'workflow_dispatch' && inputs.figyeles != 'nincs változás'
