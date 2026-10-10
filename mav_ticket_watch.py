@@ -22,7 +22,8 @@ BASE_URL = "https://jegy-a.mav.hu/IK_API_PROD/api"
 BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 CONFIG_FILE = "config.json"
 STATE_FILE = ".mav_state.json"
-TIME_TOLERANCE = timedelta(minutes=5)
+# A figyelt vonatok 2 óránként járnak, ezért a MÁV kisebb menetrendi eltolása (pl. 15:25 -> 15:29) még nem téveszt meg.
+TIME_TOLERANCE = timedelta(minutes=15)
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -77,7 +78,7 @@ def next_departure(train: dict, now: datetime) -> datetime:
 
 def train_label(train: dict, dep: datetime) -> str:
     day = f"{MONTH_NAMES[dep.month - 1]} {dep.day}. ({WEEKDAY_NAMES[dep.weekday()]})"
-    return f"{day} {train['indulas']}, {train['honnan']} → {train['hova']}"
+    return f"{day} {dep:%H:%M}, {train['honnan']} → {train['hova']}"
 
 
 def trains_for_mode(cfg: dict, mode: str) -> list[str]:
@@ -218,7 +219,7 @@ def classes_text(names: list[str]) -> str:
 
 
 def check_train(session: requests.Session, stations: list[dict], customer_key: str,
-                train: dict, dep: datetime, wanted: str, debug: bool) -> list[str] | None:
+                train: dict, dep: datetime, wanted: str, debug: bool) -> tuple[list[str] | None, datetime | None]:
     from_st = find_station(stations, train["honnan"])
     to_st = find_station(stations, train["hova"])
     # Kicsit korábbról keresünk, hogy a célvonat biztosan benne legyen a találatokban.
@@ -233,7 +234,9 @@ def check_train(session: requests.Session, stations: list[dict], customer_key: s
         for r in routes:
             print(debug_route_summary(r))
     match = find_matching_route(routes, dep)
-    return None if match is None else available_classes(match, wanted)
+    if match is None:
+        return None, None
+    return available_classes(match, wanted), parse_departure(match["departure"]["time"])
 
 
 def send_ntfy(topic: str, title: str, message: str, urgent: bool = True) -> None:
@@ -307,8 +310,8 @@ def run_check(cfg: dict, topic: str, debug: bool, test_notify: bool) -> bool:
     for name in names:
         train = cfg["vonatok"][name]
         dep = next_departure(train, now)
-        label = train_label(train, dep)
-        classes = check_train(session, stations, customer_key, train, dep, wanted, debug)
+        classes, actual_dep = check_train(session, stations, customer_key, train, dep, wanted, debug)
+        label = train_label(train, actual_dep or dep)
         if classes is None:
             status = "nem találom ezt a vonatot"
         elif classes:
@@ -319,7 +322,13 @@ def run_check(cfg: dict, topic: str, debug: bool, test_notify: bool) -> bool:
         status_lines.append(f"{label}: {status}")
 
         key = f"{name}|{dep.date()}"
-        if classes:
+        if classes is None:
+            new_state[key + "|nincs-vonat"] = True
+            if notify and not state.get(key + "|nincs-vonat"):
+                send_ntfy(topic, "Nem találom a vonatot",
+                          f"{label}\nA MÁV nem mutat ilyen vonatot ±15 percen belül, lehet, hogy megváltozott az "
+                          "indulási idő. Nézd meg a jegy.mav.hu-n.", urgent=False)
+        elif classes:
             new_state[key] = True
             if notify and not state.get(key):
                 send_ntfy(topic, "Van szabad jegy!", f"{label}\nVan jegy: {classes_text(classes)}")
