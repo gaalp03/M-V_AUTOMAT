@@ -354,22 +354,40 @@ def redispatch_self() -> None:
     print(f"Újraindítás kérve (HTTP {resp.status_code}).")
 
 
+FAILURE_ALERT_AFTER = 5
+
+
+def try_ntfy(topic: str, title: str, message: str) -> None:
+    try:
+        send_ntfy(topic, title, message, urgent=False)
+    except requests.RequestException as exc:
+        print(f"Az értesítést nem sikerült elküldeni: {exc!r}", flush=True)
+
+
 def watch_loop(topic: str, debug: bool, test_notify: bool, minutes: float, interval_s: int) -> int:
     deadline = monotonic() + minutes * 60
     first = True
+    failures, alerted = 0, False
     while True:
         git_sync_config()
         cfg = load_json(CONFIG_FILE, {})
         try:
             active = run_check(cfg, topic, debug and first, test_notify and first)
-        except (requests.ConnectionError, requests.Timeout) as exc:
-            print(f"A MÁV szerver most nem érhető el, később újrapróbálom: {exc}", flush=True)
-            active = True
-        except requests.HTTPError as exc:
-            if exc.response is None or exc.response.status_code < 500:
+        except Exception as exc:  # a figyelő egy MÁV-hiba miatt se álljon le
+            if minutes <= 0:
                 raise
-            print(f"MÁV szerverhiba, később újrapróbálom: {exc}", flush=True)
+            failures += 1
+            print(f"Hiba az ellenőrzésben ({failures}. egymás után), később újrapróbálom: {exc!r}", flush=True)
+            if failures == FAILURE_ALERT_AFTER:
+                alerted = True
+                try_ntfy(topic, "A jegyfigyelő hibázik",
+                         f"{failures} ellenőrzés sikertelen volt egymás után, ezalatt nem látom a jegyeket. "
+                         f"Újrapróbálom. Utolsó hiba: {exc!r}"[:400])
             active = True
+        else:
+            if alerted:
+                try_ntfy(topic, "A jegyfigyelő újra működik", "Az ellenőrzések újra sikeresek.")
+            failures, alerted = 0, False
         first = False
         if not active:
             print("A figyelés ki van kapcsolva, leállok.")
