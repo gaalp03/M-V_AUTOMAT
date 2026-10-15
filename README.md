@@ -11,7 +11,7 @@ Két vonat van beállítva (`config.json`), mindig a következő alkalomra:
 | Név | Mikor | Honnan → hova |
 |---|---|---|
 | vasárnap | minden vasárnap 15:25 | Szentlőrinc → Budapest-Kelenföld |
-| péntek | minden pénteken 16:12 | Budapest-Kelenföld → Szentlőrinc |
+| csütörtök | minden csütörtökön 16:12 | Budapest-Kelenföld → Szentlőrinc |
 
 ## Váltás és kikapcsolás
 
@@ -19,7 +19,7 @@ GitHub (appban vagy böngészőben) → a repó → **Actions** → **MÁV jegy 
 → **Run workflow** → a **Mit figyeljen?** menüben válaszd ki:
 
 - `vasárnap` – csak a vasárnapi vonatot
-- `péntek` – csak a pénteki vonatot
+- `csütörtök` – csak a csütörtöki vonatot
 - `mindkettő` – mindkettőt
 - `kikapcsolva` – semmit
 
