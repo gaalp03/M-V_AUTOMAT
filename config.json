@@ -1,5 +1,5 @@
 {
-  "figyeles": "csutortok",
+  "figyeles": "pentek",
   "osztaly": "barmelyik",
   "vonatok": {
     "vasarnap": {
@@ -10,6 +10,12 @@
     },
     "csutortok": {
       "nap": "csutortok",
+      "honnan": "Budapest-Kelenföld",
+      "hova": "Szentlőrinc",
+      "indulas": "16:12"
+    },
+    "pentek": {
+      "nap": "pentek",
       "honnan": "Budapest-Kelenföld",
       "hova": "Szentlőrinc",
       "indulas": "16:12"

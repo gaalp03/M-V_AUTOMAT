@@ -6,12 +6,13 @@ ha van, hangos push értesítést küld a telefonodra ([ntfy](https://ntfy.sh)).
 Bekapcsolt állapotban a GitHub Actionsben folyamatosan fut (egy futás kb. 6
 óra, a végén újraindítja magát). Kikapcsolva nem fut semmi.
 
-Két vonat van beállítva (`config.json`), mindig a következő alkalomra:
+Három vonat van beállítva (`config.json`), mindig a következő alkalomra:
 
 | Név | Mikor | Honnan → hova |
 |---|---|---|
 | vasárnap | minden vasárnap 15:25 | Szentlőrinc → Budapest-Kelenföld |
 | csütörtök | minden csütörtökön 16:12 | Budapest-Kelenföld → Szentlőrinc |
+| péntek | minden pénteken 16:12 | Budapest-Kelenföld → Szentlőrinc |
 
 ## Váltás és kikapcsolás
 
@@ -20,7 +21,8 @@ GitHub (appban vagy böngészőben) → a repó → **Actions** → **MÁV jegy 
 
 - `vasárnap` – csak a vasárnapi vonatot
 - `csütörtök` – csak a csütörtöki vonatot
-- `mindkettő` – mindkettőt
+- `péntek` – csak a pénteki vonatot
+- `mindkettő` – mind a három beállított vonatot
 - `kikapcsolva` – semmit
 
 → **Run workflow**. Pár másodperc múlva jön egy megerősítő push arról, hogy
@@ -38,7 +40,7 @@ kapcsold ki (vagy válts a másik vonatra).
 ## Egyéb
 
 - **Teszt értesítés:** Run workflow → pipáld be a *Küldjön teszt
-  értesítést* opciót. Ez kikapcsolt állapotban is lekérdezi mindkét vonatot,
+  értesítést* opciót. Ez kikapcsolt állapotban is lekérdezi mind a három vonatot,
   és elküldi az aktuális állapotot.
 - **Más vonat vagy időpont:** a `config.json`-ban írd át a `honnan`, `hova`,
   `indulas` vagy `nap` mezőt (`hetfo` … `vasarnap`).

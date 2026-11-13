@@ -14,6 +14,7 @@ on:
           - nincs változás
           - vasárnap
           - csütörtök
+          - péntek
           - mindkettő
           - kikapcsolva
         default: nincs változás
