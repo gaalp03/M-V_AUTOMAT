@@ -48,6 +48,7 @@ MONTH_NAMES = ["január", "február", "március", "április", "május", "június
 MODE_ALIASES = {
     "vasárnap": "vasarnap", "vasarnap": "vasarnap",
     "csütörtök": "csutortok", "csutortok": "csutortok",
+    "péntek": "pentek", "pentek": "pentek",
     "mindkettő": "mindketto", "mindketto": "mindketto",
     "kikapcsolva": "ki", "ki": "ki",
 }
@@ -402,7 +403,7 @@ def watch_loop(topic: str, debug: bool, test_notify: bool, minutes: float, inter
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--set-mode", help="vasárnap | csütörtök | mindkettő | kikapcsolva")
+    parser.add_argument("--set-mode", help="vasárnap | csütörtök | péntek | mindkettő | kikapcsolva")
     parser.add_argument("--loop-minutes", type=float, default=0,
                         help="ennyi percig ismételje az ellenőrzést, utána indítsa újra a workflow-t")
     parser.add_argument("--interval", type=int, default=180, help="ellenőrzések közti szünet másodpercben")
